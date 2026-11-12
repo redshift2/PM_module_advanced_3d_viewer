@@ -39,6 +39,17 @@ class GlbViewerController {
         })
     }
 
+    /** CAD geometry units stored by the PLM metadata importer. */
+    private static String plmUnits(PlmFreeCadPart part) {
+        String raw = part.cadLengthUnit?.toString()?.trim()?.toLowerCase(Locale.ROOT)
+        Map aliases = [millimeter:'mm', millimeters:'mm', millimetre:'mm', millimetres:'mm',
+            centimeter:'cm', centimeters:'cm', centimetre:'cm', centimetres:'cm',
+            meter:'m', meters:'m', metre:'m', metres:'m', inch:'in', inches:'in',
+            foot:'ft', feet:'ft']
+        String unit = (aliases[raw] ?: raw) as String
+        return unit in ['mm','cm','m','in','ft'] ? unit : 'mm'
+    }
+
     /** Catalog of PLM previews visible to this user. No GLB is copied. */
     def plmModels() {
         def available = PlmFreeCadPart.list(max: 1000, sort: 'id', order: 'desc').findAll { part ->
@@ -48,7 +59,7 @@ class GlbViewerController {
         }
         jsonResponse(available.collect { part ->
             [id: part.id, name: (part.label ?: part.originalName ?: 'Part ' + part.id),
-             source: 'plm', url: createLink(controller: 'plm', action: 'previewGlb', id: part.id)]
+             source: 'plm', geometryUnits: plmUnits(part), url: createLink(controller: 'plm', action: 'previewGlb', id: part.id)]
         })
     }
 
@@ -63,6 +74,7 @@ class GlbViewerController {
                     !plmPreviewStorageService.modelFile(part).isFile()) { render status:404; return }
             jsonResponse([id:part.id,source:'plm',name:part.label ?: part.originalName ?: 'Part '+part.id,
                 cadVersion:"${part.majorVersion ?: 1}.${part.minorVersion ?: 0}".toString(),
+                geometryUnits:plmUnits(part),
                 url:createLink(controller:'plm',action:'previewGlb',id:part.id)])
         } else {
             ViewerModel m = ViewerModel.get(id)
@@ -145,18 +157,25 @@ class GlbViewerController {
         List result = []
         for (def n : nodes) {
             if (!(n instanceof Map)) throw new IllegalArgumentException('Invalid node')
-            def transform = [:]
+            // CAD_TO_META exports transforms nested under transform, with quaternion [x,y,z,w].
+            // Viewer scene files store the same values at the node root as rotation.
+            Map placement = n.transform instanceof Map ? (Map)n.transform : [:]
+            Map transform = [:]
             for (String key : ['position', 'scale']) {
-                def value = n[key]
+                def value = n[key] instanceof List ? n[key] : placement[key]
+                if (value == null) value = key == 'position' ? [0,0,0] : [1,1,1]
                 if (!(value instanceof List) || value.size() != 3 ||
                     !value.every { it instanceof Number && Double.isFinite(it.doubleValue()) && Math.abs(it.doubleValue()) < 10000000 })
-                    throw new IllegalArgumentException('Invalid ' + key)
+                    throw new IllegalArgumentException("Invalid ${key} for component '${n.name ?: 'Component'}'")
                 transform[key] = value
             }
-            def rotation = n.rotation
+            def rotation = n.rotation instanceof List ? n.rotation :
+                (n.quaternion instanceof List ? n.quaternion : placement.quaternion)
+            if (rotation == null) rotation = placement.rotation instanceof List ? placement.rotation : [0,0,0,1]
             if (!(rotation instanceof List) || !(rotation.size() in [3,4]) ||
-                !rotation.every { it instanceof Number && Double.isFinite(it.doubleValue()) && Math.abs(it.doubleValue()) < 10000000 })
-                throw new IllegalArgumentException('Invalid rotation')
+                !rotation.every { it instanceof Number && Double.isFinite(it.doubleValue()) && Math.abs(it.doubleValue()) < 10000000 } ||
+                (rotation.size() == 4 && !rotation.any { Math.abs(it.doubleValue()) > 1e-12 }))
+                throw new IllegalArgumentException("Invalid rotation for component '${n.name ?: 'Component'}'")
             transform.rotation = rotation
             transform.visible = n.visible != false
             transform.instanceId = (n.instanceId ?: UUID.randomUUID().toString()).toString().take(100)
@@ -168,17 +187,16 @@ class GlbViewerController {
                     throw new IllegalArgumentException('Linked assembly is not accessible: ' + assemblyId)
                 result << (transform + [type:'assemblyReference', assemblyId:assemblyId, versionPolicy:'latest'])
             } else {
-                Long modelId = n.id?.toString()?.toLong()
-                String source = n.source == 'plm' ? 'plm' : 'uploaded'
+                Long modelId = (n.partId ?: n.id)?.toString()?.toLong()
+                String source = (n.source == 'plm' || n.partId != null || n.type == 'resolvedComponent') ? 'plm' : 'uploaded'
                 if (!modelId) throw new IllegalArgumentException('Missing part ID')
                 if (source == 'plm') {
                     PlmFreeCadPart part = PlmFreeCadPart.get(modelId)
-                    if (!part || !plmFreeCadSecurityService.canDownloadFile(part) ||
-                        !plmPreviewStorageService.modelFile(part).isFile())
-                        throw new IllegalArgumentException('PLM preview unavailable: ' + modelId)
+                    if (!part || !plmFreeCadSecurityService.canDownloadFile(part))
+                        throw new IllegalArgumentException('PLM part unavailable: ' + modelId)
                 } else if (!ViewerModel.exists(modelId))
-                    throw new IllegalArgumentException('Uploaded GLB unavailable: ' + modelId)
-                String geometryUnits = (n.geometryUnits ?: n.units ?: 'm').toString()
+                    throw new IllegalArgumentException('Uploaded model record unavailable: ' + modelId)
+                String geometryUnits = source == 'plm' ? plmUnits(PlmFreeCadPart.get(modelId)) : (n.geometryUnits ?: n.units ?: 'm').toString()
                 if (!(geometryUnits in ['mm','cm','m','in','ft']))
                     throw new IllegalArgumentException('Invalid geometry units')
                 result << (transform + [type:'partInstance',id:modelId,source:source,
