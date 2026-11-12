@@ -1,0 +1,10 @@
+plugins {
+    id 'taack-grails-assets-plugin'
+}
+
+grails {
+    plugins {
+        implementation project(':crew')
+        implementation project(':plm')
+    }
+}
