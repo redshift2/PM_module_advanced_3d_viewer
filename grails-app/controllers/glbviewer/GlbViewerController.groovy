@@ -341,9 +341,10 @@ class GlbViewerController {
             if (!s || (!s.shared && s.ownerUsername != username())) { jsonResponse([error:'Assembly not accessible'],403); return }
         } else {
             PlmFreeCadPart part = PlmFreeCadPart.get(id)
-            if (!part || !plmFreeCadSecurityService.canDownloadFile(part) ||
-                !plmPreviewStorageService.modelFile(part).isFile()) {
-                jsonResponse([error:'PLM part preview not accessible'],403); return
+            // Queue any PLM part the user may download. The viewer resolves
+            // its available format (ASMJ, GLB, or missing) via modelInfo.
+            if (!part || !plmFreeCadSecurityService.canDownloadFile(part)) {
+                jsonResponse([error:'PLM part not accessible'],403); return
             }
         }
         ViewerAddRequest queued = new ViewerAddRequest(ownerUsername:username(),
