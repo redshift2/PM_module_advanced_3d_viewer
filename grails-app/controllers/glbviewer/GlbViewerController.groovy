@@ -32,7 +32,7 @@ class GlbViewerController {
         render(status: status, contentType: 'application/json', text: JsonOutput.toJson(data))
     }
 
-    def index() { }
+    def index() { [viewerUsername:username()] }
 
     def models() {
         jsonResponse(ViewerModel.list(sort: 'dateCreated', order: 'desc', max: 500).collect { m ->
@@ -49,7 +49,7 @@ class GlbViewerController {
             meter:'m', meters:'m', metre:'m', metres:'m', inch:'in', inches:'in',
             foot:'ft', feet:'ft']
         String unit = (aliases[raw] ?: raw) as String
-        return unit in ['mm','cm','m','in','ft'] ? unit : 'mm'
+        return unit in ['mm','cm','m','in','ft'] ? unit : null
     }
 
     /** ASMJ wins over GLB. Keep missing parts addressable for the model tree. */
@@ -60,8 +60,8 @@ class GlbViewerController {
             .find { it.originalName?.toLowerCase(Locale.ROOT)?.endsWith('.asmj') }
         boolean glb = plmPreviewStorageService.modelFile(part).isFile()
         String format = asm ? 'asmj' : (glb ? 'glb' : 'missing')
-        [id:part.id, name:part.label ?: part.originalName ?: 'Part ' + part.id,
-         source:'plm', cadVersion:"${major}.${minor}".toString(),
+        [id:part.id, name:part.originalName ?: part.label ?: 'Part ' + part.id,
+         filename:part.originalName ?: part.label, label:part.label, lifecycleState:part.lifecycleState?.toString(), thumbnailUrl:createLink(controller:'plm', action:'previewPart', id:part.id), source:'plm', cadVersion:"${major}.${minor}".toString(),
          geometryUnits:plmUnits(part), format:format,
          url:asm ? createLink(controller:'plmManagedFile', action:'download', id:asm.id) :
              (glb ? createLink(controller:'plm',action:'previewGlb',id:part.id) : null)]
@@ -73,6 +73,27 @@ class GlbViewerController {
                 plmFreeCadSecurityService.canDownloadFile(part)
         }
         jsonResponse(available.collect { part -> plmModelDescriptor(part) })
+    }
+
+    /** Search current PLM parts; never expose parts the caller cannot download. */
+    def searchPlmParts() {
+        String query = (params.q ?: '').toString().trim().toLowerCase(Locale.ROOT)
+        if (query.length() > 160) { jsonResponse([error:'Search is too long'], 400); return }
+        List matches = []
+        // Search is capped to avoid rendering unbounded result sets in the modal.
+        PlmFreeCadPart.list(max:5000, sort:'id', order:'desc').each { part ->
+            if (matches.size() >= 100) return
+            if (part.active != true || part.nextVersion != null ||
+                !plmFreeCadSecurityService.canDownloadFile(part)) return
+            String filename = part.originalName ?: ''
+            String label = part.label ?: ''
+            if (!query || part.id.toString().contains(query) ||
+                filename.toLowerCase(Locale.ROOT).contains(query) ||
+                label.toLowerCase(Locale.ROOT).contains(query)) {
+                matches << plmModelDescriptor(part)
+            }
+        }
+        jsonResponse(matches)
     }
 
     def modelInfo() {
@@ -147,6 +168,29 @@ class GlbViewerController {
             shared:s.shared, updated:s.lastUpdated] })
     }
 
+    /** Toggle sharing for a saved scene. Only its owner may change visibility. */
+    @Transactional
+    def shareScene(Long id) {
+        ViewerScene s = ViewerScene.get(id)
+        if (!s) { jsonResponse([error:'Scene not found'],404); return }
+        if (s.ownerUsername != username()) { jsonResponse([error:'Not authorized'],403); return }
+        if (request.method != 'POST') { jsonResponse([error:'POST required'],405); return }
+        s.shared = request.JSON.shared == true
+        s.save(failOnError:true,flush:true)
+        jsonResponse([id:s.id,shared:s.shared])
+    }
+
+    /** Delete only scenes owned by the current user. */
+    @Transactional
+    def deleteScene(Long id) {
+        ViewerScene s = ViewerScene.get(id)
+        if (!s) { jsonResponse([error:'Scene not found'],404); return }
+        if (s.ownerUsername != username()) { jsonResponse([error:'Not authorized'],403); return }
+        if (request.method != 'POST') { jsonResponse([error:'POST required'],405); return }
+        s.delete(flush:true)
+        jsonResponse([deleted:true,id:id])
+    }
+
     def loadScene(Long id) {
         ViewerScene s = ViewerScene.get(id)
         if (!s || (!s.shared && s.ownerUsername != username())) { render status:404; return }
@@ -186,7 +230,9 @@ class GlbViewerController {
             transform.rotation = rotation
             transform.visible = n.visible != false
             transform.instanceId = (n.instanceId ?: UUID.randomUUID().toString()).toString().take(100)
-            transform.name = (n.name ?: 'Component').toString().take(160)
+            transform.name = (n.sourceFile ?: n.name ?: 'Component').toString().replace('\\','/').tokenize('/').last().take(160)
+            if (n.sourceFile) transform.sourceFile = n.sourceFile.toString().take(1024)
+            if (n.defaultLocation instanceof Map) transform.defaultLocation = n.defaultLocation
             if (n.type == 'assemblyReference') {
                 Long assemblyId = n.assemblyId?.toString()?.toLong()
                 ViewerScene child = assemblyId ? ViewerScene.get(assemblyId) : null
@@ -196,17 +242,17 @@ class GlbViewerController {
             } else {
                 Long modelId = (n.partId ?: n.id)?.toString()?.toLong()
                 String source = (n.source == 'plm' || n.partId != null || n.type == 'resolvedComponent') ? 'plm' : 'uploaded'
-                if (!modelId) throw new IllegalArgumentException('Missing part ID')
-                if (source == 'plm') {
+                if (!modelId && n.type != 'unresolvedComponent') throw new IllegalArgumentException('Missing part ID')
+                if (source == 'plm' && modelId) {
                     PlmFreeCadPart part = PlmFreeCadPart.get(modelId)
                     if (!part || !plmFreeCadSecurityService.canDownloadFile(part))
                         throw new IllegalArgumentException('PLM part unavailable: ' + modelId)
-                } else if (!ViewerModel.exists(modelId))
+                } else if (source != 'plm' && !ViewerModel.exists(modelId))
                     throw new IllegalArgumentException('Uploaded model record unavailable: ' + modelId)
-                String geometryUnits = source == 'plm' ? plmUnits(PlmFreeCadPart.get(modelId)) : (n.geometryUnits ?: n.units ?: 'm').toString()
-                if (!(geometryUnits in ['mm','cm','m','in','ft']))
+                String geometryUnits = source == 'plm' ? (modelId ? plmUnits(PlmFreeCadPart.get(modelId)) : 'mm') : (n.geometryUnits ?: n.units ?: 'm').toString()
+                if (geometryUnits && !(geometryUnits in ['mm','cm','m','in','ft']))
                     throw new IllegalArgumentException('Invalid geometry units')
-                result << (transform + [type:'partInstance',id:modelId,source:source,
+                result << (transform + [type:modelId ? 'partInstance' : 'unresolvedComponent',id:modelId,source:source,
                     geometryUnits:geometryUnits,cadVersion:n.cadVersion?.toString()?.take(30)])
             }
         }
