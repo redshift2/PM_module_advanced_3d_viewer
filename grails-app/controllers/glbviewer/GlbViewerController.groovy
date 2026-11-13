@@ -8,6 +8,7 @@ import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.Paths
 import java.util.UUID
+import plm.PlmCadVersionFileService
 import plm.PlmFreeCadPart
 import plm.PlmPreviewStorageService
 import plm.PlmFreeCadSecurityService
@@ -15,6 +16,7 @@ import plm.PlmFreeCadSecurityService
 @Secured(['ROLE_PLM_USER', 'ROLE_ADMIN'])
 class GlbViewerController {
     def springSecurityService
+    PlmCadVersionFileService plmCadVersionFileService
     PlmPreviewStorageService plmPreviewStorageService
     PlmFreeCadSecurityService plmFreeCadSecurityService
 
@@ -50,32 +52,37 @@ class GlbViewerController {
         return unit in ['mm','cm','m','in','ft'] ? unit : 'mm'
     }
 
-    /** Catalog of PLM previews visible to this user. No GLB is copied. */
-    def plmModels() {
-        def available = PlmFreeCadPart.list(max: 1000, sort: 'id', order: 'desc').findAll { part ->
-            part.active == true && part.nextVersion == null &&
-                plmFreeCadSecurityService.canDownloadFile(part) &&
-                plmPreviewStorageService.modelFile(part).isFile()
-        }
-        jsonResponse(available.collect { part ->
-            [id: part.id, name: (part.label ?: part.originalName ?: 'Part ' + part.id),
-             source: 'plm', geometryUnits: plmUnits(part), url: createLink(controller: 'plm', action: 'previewGlb', id: part.id)]
-        })
+    /** ASMJ wins over GLB. Keep missing parts addressable for the model tree. */
+    private Map plmModelDescriptor(PlmFreeCadPart part) {
+        Integer major = part.majorVersion ?: 1
+        Integer minor = part.minorVersion ?: 0
+        def asm = plmCadVersionFileService.listForVersion(part.id as Long, major, minor, 'ASSEMBLY')
+            .find { it.originalName?.toLowerCase(Locale.ROOT)?.endsWith('.asmj') }
+        boolean glb = plmPreviewStorageService.modelFile(part).isFile()
+        String format = asm ? 'asmj' : (glb ? 'glb' : 'missing')
+        [id:part.id, name:part.label ?: part.originalName ?: 'Part ' + part.id,
+         source:'plm', cadVersion:"${major}.${minor}".toString(),
+         geometryUnits:plmUnits(part), format:format,
+         url:asm ? createLink(controller:'plmManagedFile', action:'download', id:asm.id) :
+             (glb ? createLink(controller:'plm',action:'previewGlb',id:part.id) : null)]
     }
 
-    /** Resolve a specific revision, including older revisions not shown in the latest-only catalog. */
+    def plmModels() {
+        def available = PlmFreeCadPart.list(max:1000, sort:'id', order:'desc').findAll { part ->
+            part.active == true && part.nextVersion == null &&
+                plmFreeCadSecurityService.canDownloadFile(part)
+        }
+        jsonResponse(available.collect { part -> plmModelDescriptor(part) })
+    }
+
     def modelInfo() {
         Long id
         try { id = params.id?.toString()?.toLong() } catch (Exception ignored) { render status:400; return }
         if (!id) { render status:400; return }
         if (params.source == 'plm') {
             PlmFreeCadPart part = PlmFreeCadPart.get(id)
-            if (!part || !plmFreeCadSecurityService.canDownloadFile(part) ||
-                    !plmPreviewStorageService.modelFile(part).isFile()) { render status:404; return }
-            jsonResponse([id:part.id,source:'plm',name:part.label ?: part.originalName ?: 'Part '+part.id,
-                cadVersion:"${part.majorVersion ?: 1}.${part.minorVersion ?: 0}".toString(),
-                geometryUnits:plmUnits(part),
-                url:createLink(controller:'plm',action:'previewGlb',id:part.id)])
+            if (!part || !plmFreeCadSecurityService.canDownloadFile(part)) { render status:404; return }
+            jsonResponse(plmModelDescriptor(part))
         } else {
             ViewerModel m = ViewerModel.get(id)
             if (!m) { render status:404; return }

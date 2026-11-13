@@ -79,7 +79,7 @@ async function api(action,options){const r=await fetch(url(action),{credentials:
 async function refresh(){const source=$('source').value;catalog=await api(source==='plm'?'plmModels':'models');$('catalog').replaceChildren(...catalog.map(m=>new Option(m.name+' — #'+m.id,m.id)));const scenes=await api('scenes');const current=$('scenes').value;$('scenes').replaceChildren(...scenes.map(s=>new Option(s.name+' — '+s.owner+(s.shared?' (shared)':''),s.id)));if(current)$('scenes').value=current;status('Lists refreshed')}
 async function findModel(id,source){const list=await api(source==='plm'?'plmModels':'models');const found=list.find(x=>String(x.id)===String(id));if(found)return {...found,source};return api('modelInfo?source='+encodeURIComponent(source)+'&id='+encodeURIComponent(id))}
 function clearHighlight(){for(const [mesh,materials] of selectionMaterials){mesh.material=materials}selectionMaterials=[]}
-function highlight(entry){clearHighlight();if(!entry)return;entry.object.traverse(node=>{if(!node.isMesh)return;selectionMaterials.push([node,node.material]);const highlightMat=mat=>{const m=mat.clone();if(m.emissive){m.emissive.setHex(0x125fa5);m.emissiveIntensity=.5}else m.color?.lerp(new THREE.Color(0x49a9ff),.35);return m};node.material=Array.isArray(node.material)?node.material.map(highlightMat):highlightMat(node.material)})}
+function highlight(entry){clearHighlight();if(!entry)return;entry.object.traverse(node=>{if(!node.isMesh)return;selectionMaterials.push([node,node.material]);const highlightMat=mat=>{const m=mat.clone();if(m.emissive){m.emissive.setHex(0xff2020);m.emissiveIntensity=.7}else m.color?.lerp(new THREE.Color(0xff2020),.7);return m};node.material=Array.isArray(node.material)?node.material.map(highlightMat):highlightMat(node.material)})}
 function select(entry){clearHighlight();selected=entry;transform.detach();if(entry&&entry.object.visible){if($('move').classList.contains('active')||$('rotate').classList.contains('active')||$('scale').classList.contains('active'))transform.attach(entry.object);highlight(entry)}if(spinCenter==='selected'&&entry)applySpinPivot();updateFields();renderObjects();updateSection();updateDeleteButtons()}
 function updateFields(){$('selected').textContent=selected?selected.name:'None selected';for(const [id,prop,mul] of [['pos','position',1],['rot','rotation',180/Math.PI],['scale-values','scale',1]])$(''+id).querySelectorAll('input').forEach((input,i)=>{input.value=selected?+(selected.object[prop].toArray()[i]*mul).toFixed(5):'';input.disabled=!selected})}
 for(const [id,prop,mul] of [['pos','position',1],['rot','rotation',Math.PI/180],['scale-values','scale',1]])$(id).querySelectorAll('input').forEach((input,i)=>input.addEventListener('change',()=>{if(!selected)return;const n=Number(input.value);if(!Number.isFinite(n)||Math.abs(n)>1e7)return updateFields();selected.object[prop].setComponent(i,n*mul);updateFields();updateMeasures();updateSection()}));
@@ -89,14 +89,14 @@ function renderObjects(){
  const tree=$('tree');tree.replaceChildren();
  const eyeSvg=visible=>'<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12z" fill="'+(visible?'#bcdcff':'none')+'" stroke="#8cc4ff" stroke-width="1.8"/><circle cx="12" cy="12" r="3.3" fill="#1b528c"/>'+(visible?'':'<path d="M3 21 21 3" stroke="#f1b9b9" stroke-width="2"/>')+'</svg>';
  function draw(entry,parent,depth=0){
-  const row=document.createElement('div');row.className='gv-tree-row'+(entry===selected?' is-selected':'');row.style.marginLeft=(depth*19)+'px';row.setAttribute('role','treeitem');row.setAttribute('aria-selected',String(entry===selected));
+  const row=document.createElement('div');row.className='gv-tree-row'+(entry===selected?' is-selected':'');row.style.marginLeft=(depth*19)+'px';if(entry===selected){row.style.backgroundColor='rgba(220,38,38,.24)';row.style.outline='1px solid #ef4444';row.style.borderRadius='4px'}row.setAttribute('role','treeitem');row.setAttribute('aria-selected',String(entry===selected));
   if(entry.kind==='assembly'){
    const exp=document.createElement('button');exp.type='button';exp.className='gv-expander';exp.textContent=entry.treeCollapsed?'▸':'▾';exp.title=entry.treeCollapsed?'Expand assembly':'Collapse assembly';exp.onclick=()=>{entry.treeCollapsed=!entry.treeCollapsed;renderObjects()};row.append(exp);
   }else{const spacer=document.createElement('span');spacer.className='gv-expander-spacer';row.append(spacer)}
   const eye=document.createElement('button');eye.className='gv-eye';eye.type='button';eye.innerHTML=eyeSvg(entry.object.visible);eye.title=entry.object.visible?'Hide':'Show';eye.setAttribute('aria-label',eye.title+' '+entry.name);eye.onclick=()=>{entry.object.visible=!entry.object.visible;renderObjects();updateSection()};row.append(eye);
-  if(entry.missingGeometry){const missing=document.createElement('span');missing.textContent='✖';missing.style.cssText='color:#e33434;font-weight:900;font-size:17px;line-height:1';missing.title='Missing GLB: '+(entry.error||'Geometry unavailable');row.append(missing)}
+  if(entry.missingGeometry){const missing=document.createElement('span');missing.textContent='✖';missing.style.cssText='color:#e33434;font-weight:900;font-size:17px;line-height:1';missing.title='Missing ASMJ/GLB: '+(entry.error||'File unavailable');row.append(missing)}
   const icon=document.createElement('span');icon.className='gv-part-icon';icon.innerHTML=entry.kind==='assembly'?'<svg viewBox="0 0 24 24"><path d="M12 2v7M12 9 4 15M12 9l8 6" stroke="#b6d8ff" stroke-width="2"/><rect x="8" y="1" width="8" height="7" fill="#70d1e3" stroke="#1d508c"/><rect x="1" y="15" width="8" height="7" fill="#f0d65d" stroke="#7b650e"/><rect x="15" y="15" width="8" height="7" fill="#f0d65d" stroke="#7b650e"/></svg>':'<svg viewBox="0 0 24 24"><path d="m12 2 10 5v11l-10 5-10-5V7z" fill="#c5d3e4" stroke="#54677f"/><path d="m2 7 10 5 10-5M12 12v11" fill="none" stroke="#54677f"/></svg>';row.append(icon);
-  const name=document.createElement('button');name.type='button';name.className='gv-part-name'+(entry.kind==='assembly'?' gv-link':'');name.textContent=entry.name;name.title=entry.missingGeometry?'Missing GLB: '+(entry.error||'Geometry unavailable'):(entry.kind==='assembly'?'Linked assembly: '+entry.name:'Select '+entry.name);name.onclick=()=>select(entry);name.ondblclick=()=>focusEntry(entry);row.append(name);
+  const name=document.createElement('button');name.type='button';name.className='gv-part-name'+(entry.kind==='assembly'?' gv-link':'');name.textContent=entry.name;if(entry===selected){name.style.color='#ff4b4b';name.style.fontWeight='700'}name.title=entry.missingGeometry?'Missing ASMJ/GLB: '+(entry.error||'File unavailable'):(entry.kind==='assembly'?'Linked assembly: '+entry.name:'Select '+entry.name);name.onclick=()=>select(entry);name.ondblclick=()=>focusEntry(entry);row.append(name);
   if(entry.kind==='assembly'){const link=document.createElement('span');link.className='gv-link-indicator';link.title='Linked assembly';link.textContent='🔗';row.append(link)}
   if(entry.cadVersion){const v=document.createElement('span');v.className='gv-part-version';v.textContent='v'+entry.cadVersion;row.append(v)}
   if(entry.updateAvailable){const up=document.createElement('span');up.className='gv-update-available';up.title='Newer version available';up.textContent='⬆';row.append(up)}
@@ -105,7 +105,8 @@ function renderObjects(){
  }
  for(const entry of entries)draw(entry,tree)
 }
-async function addPart(data,parent=null){
+// Recursively resolve PLM assemblies. Each occurrence owns its own transform and tree node.
+async function addPart(data,parent=null,partStack=[]){
  const source=data.source==='plm'?'plm':'uploaded';
  const placement=new THREE.Group();placement.name=data.name||'Part';applyTransform(placement,data);
  (parent?parent.object:scene).add(placement);
@@ -114,21 +115,45 @@ async function addPart(data,parent=null){
   cadVersion:data.cadVersion||null,children:[],missingGeometry:false,error:null};
  (parent?parent.children:entries).push(entry);
  try{
+  if(source==='plm'&&partStack.map(String).includes(String(data.id)))
+   throw Error('Circular PLM assembly reference: '+[...partStack,data.id].join(' → '));
+  if(partStack.length>=24)throw Error('PLM assembly nesting limit reached');
+  if(source==='plm'&&(!data.id||!Number.isSafeInteger(Number(data.id))))throw Error('Unresolved PLM component ID');
   const m=await findModel(data.id,source);
-  const gltf=await loadModelWithProgress(m.url,data.name||m.name);
-  const object=gltf.scene;object.userData.viewerEntry=true;
-  const native=validUnit(source==='plm'?(m.geometryUnits||data.geometryUnits||'mm'):(data.geometryUnits||data.units||'m'));
-  const parentUnit=validUnit(data.parentUnits||'mm');
-  object.scale.multiplyScalar(factors[native]/factors[parentUnit]);
-  placement.add(object);entry.id=m.id;entry.geometryUnits=native;
+  entry.id=m.id;entry.cadVersion=m.cadVersion||entry.cadVersion;
+  if(m.format==='missing')throw Error('Neither ASMJ nor GLB is available');
+  if(m.format==='asmj'){
+   entry.kind='assembly';
+   const response=await fetch(m.url,{credentials:'same-origin',cache:'no-store'});
+   if(!response.ok)throw Error('ASMJ download failed (HTTP '+response.status+')');
+   const doc=await response.json();
+   if(doc.format!=='PartsManagerAssembly'||!Array.isArray(doc.nodes))throw Error('Invalid ASMJ document');
+   const sceneUnit=validUnit(doc.units||doc.lengthUnit||'mm');
+   const nextStack=[...partStack,Number(data.id)];
+   for(const n of doc.nodes){
+    const t=n.transform||{};
+    const child=await addPart({id:n.partId??n.id,source:'plm',name:n.name||n.label||n.sourceFile||'Unresolved component',
+     position:n.position||t.position,rotation:n.rotation||t.quaternion,scale:n.scale||t.scale,
+     parentUnits:sceneUnit},entry,nextStack);
+    child.object.position.multiplyScalar(factors[sceneUnit]/factors.mm);
+   }
+  }else{
+   if(!m.url)throw Error('GLB file unavailable');
+   const gltf=await loadModelWithProgress(m.url,data.name||m.name);
+   const object=gltf.scene;object.userData.viewerEntry=true;
+   const native=validUnit(source==='plm'?(m.geometryUnits||data.geometryUnits||'mm'):(data.geometryUnits||data.units||'m'));
+   const parentUnit=validUnit(data.parentUnits||'mm');
+   object.scale.multiplyScalar(factors[native]/factors[parentUnit]);
+   placement.add(object);entry.geometryUnits=native;
+  }
  }catch(error){
-  entry.missingGeometry=true;entry.error=error?.message||'GLB geometry unavailable';
-  console.warn('Missing GLB for',entry.name,entry.id,entry.error);
+  entry.missingGeometry=true;entry.error=error?.message||'ASMJ/GLB unavailable';
+  console.warn('Unable to load',entry.name,entry.id,entry.error);
  }
- select(entry);return entry;
+ renderObjects();select(entry);return entry;
 }
 async function addAssemblyReference(data,parent=null,stack=[]){const id=Number(data.assemblyId);if(!Number.isSafeInteger(id)||id<=0)throw Error('Linked assembly requires a saved scene ID');if(stack.includes(id))throw Error('Circular assembly reference: '+[...stack,id].join(' → '));if(stack.length>12)throw Error('Assembly nesting limit reached');const container=new THREE.Group();applyTransform(container,data);(parent?parent.object:scene).add(container);const entry={kind:'assembly',instanceId:data.instanceId||uuid(),assemblyId:id,name:data.name||'Linked Assembly #'+id,object:container,children:[],units:validUnit(data.units||'mm'),error:null};(parent?parent.children:entries).push(entry);try{const loaded=await api('loadScene/'+id);entry.name=data.name||loaded.name;await buildNodes(loaded.scene,entry,[...stack,id])}catch(e){entry.error=e.message}renderObjects();return entry}
-async function buildNodes(doc,parent=null,stack=[]){const sceneUnit=validUnit(doc.units||'mm');const nodes=Array.isArray(doc.nodes)?doc.nodes:Array.isArray(doc.children)?doc.children:(doc.models||[]).map(m=>({...m,type:'partInstance'}));for(const n of nodes){if(n.type==='assemblyReference'){const child=await addAssemblyReference(n,parent,stack);child.object.position.multiplyScalar(factors[sceneUnit]/factors.mm)}else if(n.type==='partInstance'||n.type==='resolvedComponent'||n.type==='unresolvedComponent'||!n.type){const entry=await addPart({...n,id:n.partId||n.id,source:n.partId!=null?'plm':n.source,rotation:n.rotation||n.transform?.quaternion,position:n.position||n.transform?.position,scale:n.scale||n.transform?.scale,parentUnits:sceneUnit},parent);entry.object.position.multiplyScalar(factors[sceneUnit]/factors.mm);}}renderObjects()}
+async function buildNodes(doc,parent=null,stack=[]){const sceneUnit=validUnit(doc.units||'mm');const nodes=Array.isArray(doc.nodes)?doc.nodes:Array.isArray(doc.children)?doc.children:(doc.models||[]).map(m=>({...m,type:'partInstance'}));for(const n of nodes){if(n.type==='assemblyReference'){const child=await addAssemblyReference(n,parent,stack);child.object.position.multiplyScalar(factors[sceneUnit]/factors.mm)}else if(n.type==='partInstance'||n.type==='resolvedComponent'||n.type==='unresolvedComponent'||!n.type){const entry=await addPart({...n,id:n.partId??n.id,source:n.partId!=null?'plm':n.source,rotation:n.rotation||n.transform?.quaternion,position:n.position||n.transform?.position,scale:n.scale||n.transform?.scale,parentUnits:sceneUnit},parent);entry.object.position.multiplyScalar(factors[sceneUnit]/factors.mm);}}renderObjects()}
 function allEntries(){const out=[];const walk=arr=>arr.forEach(e=>{out.push(e);walk(e.children||[])});walk(entries);return out}
 function clearScene(){clearHighlight();transform.detach();selected=null;entries.forEach(e=>scene.remove(e.object));entries=[];clearMeasures();updateSection();renderObjects()}
 function visibleBounds(){const box=new THREE.Box3();entries.filter(e=>e.object.visible).forEach(e=>box.expandByObject(e.object));return box.isEmpty()?null:box}
