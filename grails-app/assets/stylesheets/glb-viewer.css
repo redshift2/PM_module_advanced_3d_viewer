@@ -100,3 +100,10 @@
 .gv .gv-view:fullscreen .gv-orientation{top:14px;right:14px}
 .gv .gv-view:fullscreen .gv-fullscreen{right:16px;bottom:16px}
 .gv .gv-section-field output{margin-left:auto;font-weight:600;color:var(--pm-text)}
+
+.gv-version-menu{position:fixed;z-index:99999;min-width:210px;max-width:290px;max-height:65vh;overflow:auto;background:#172334;color:#e8f0fa;border:1px solid #60738a;border-radius:6px;box-shadow:0 8px 28px #0008;padding:5px;font:13px sans-serif}
+.gv-version-menu-heading{padding:9px 10px;border-bottom:1px solid #536174;font-weight:700;overflow-wrap:anywhere}
+.gv-version-menu-info{padding:10px;color:#c5d3e4}
+.gv-version-menu-option{display:block;width:100%;text-align:left;background:transparent;color:inherit;border:0;border-radius:4px;padding:9px 10px;cursor:pointer}
+.gv-version-menu-option:hover:not(:disabled),.gv-version-menu-option:focus-visible{background:#31577d}
+.gv-version-menu-option:disabled{opacity:.55;cursor:default}

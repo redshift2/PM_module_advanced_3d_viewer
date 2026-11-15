@@ -253,7 +253,8 @@ class GlbViewerController {
                 if (geometryUnits && !(geometryUnits in ['mm','cm','m','in','ft']))
                     throw new IllegalArgumentException('Invalid geometry units')
                 result << (transform + [type:modelId ? 'partInstance' : 'unresolvedComponent',id:modelId,source:source,
-                    geometryUnits:geometryUnits,cadVersion:n.cadVersion?.toString()?.take(30)])
+                    geometryUnits:geometryUnits,cadVersion:n.cadVersion?.toString()?.take(30),
+                    versionRevisionId:n.versionRevisionId?.toString()?.isLong() ? n.versionRevisionId.toString().toLong() : null])
             }
         }
         String units = (body.units ?: 'mm').toString()
@@ -263,6 +264,7 @@ class GlbViewerController {
         def sections = body.sections instanceof List ? body.sections : []
         if (sections.size() > 12) throw new IllegalArgumentException('Too many sections')
         return [format:'PartsManagerAssembly',schemaVersion:2,units:units,nodes:result,
+            versionOverrides:body.versionOverrides instanceof Map ? body.versionOverrides : [:],
             measurements:measurements,sections:sections,camera:body.camera instanceof Map ? body.camera : [:],
             displayUnits:(body.displayUnits ?: 'mm').toString(),tree:body.tree instanceof Map ? body.tree : [:]]
     }
@@ -325,6 +327,60 @@ class GlbViewerController {
             } catch (Exception ignored) { }
         }
         jsonResponse(versions)
+    }
+
+    /** Versions available for a single PLM part lineage, including historical GLB previews. */
+    def partVersionChoices() {
+        Long id
+        try { id = params.id?.toString()?.toLong() } catch (Exception ignored) { jsonResponse([error:'Invalid part ID'],400); return }
+        PlmFreeCadPart part = id ? PlmFreeCadPart.get(id) : null
+        if (!part || !plmFreeCadSecurityService.canDownloadFile(part)) { jsonResponse([error:'Part not found'],404); return }
+        PlmFreeCadPart latest = part
+        int depth = 0
+        while (latest.nextVersion && depth++ < 100) latest = latest.nextVersion
+        if (!plmFreeCadSecurityService.canDownloadFile(latest)) { jsonResponse([error:'Part not accessible'],403); return }
+        List<PlmFreeCadPart> revisions = ([latest] + (latest.history ?: []).findAll { it != null }).unique { it.id }
+        List choices = revisions.findAll { plmFreeCadSecurityService.canDownloadFile(it) }.collect { revision ->
+            Integer major = revision.majorVersion == null ? 1 : revision.majorVersion
+            Integer minor = revision.minorVersion == null ? 0 : revision.minorVersion
+            File preview = plmPreviewStorageService.modelFileForVersion(latest.id, major, minor)
+            if (!preview.isFile() && revision.id != latest.id)
+                preview = plmPreviewStorageService.modelFileForVersion(revision.id, major, minor)
+            [id:revision.id, version:"${major}.${minor}".toString(), previewAvailable:preview.isFile(),
+             url:preview.isFile() ? createLink(controller:'glbViewer',action:'partVersionFile',
+                 params:[id:latest.id,revisionId:revision.id]) : null]
+        }.sort { a,b ->
+            List<Integer> av=a.version.tokenize('.').collect { it as Integer }
+            List<Integer> bv=b.version.tokenize('.').collect { it as Integer }
+            (bv[0] <=> av[0]) ?: (bv[1] <=> av[1])
+        }
+        jsonResponse([partId:latest.id, versions:choices])
+    }
+
+    /** Authenticated historical preview, restricted to the requested part's lineage. */
+    def partVersionFile() {
+        Long id, revisionId
+        try { id=params.id?.toString()?.toLong(); revisionId=params.revisionId?.toString()?.toLong() }
+        catch (Exception ignored) { response.sendError(400); return }
+        PlmFreeCadPart latest = id ? PlmFreeCadPart.get(id) : null
+        if (!latest || !plmFreeCadSecurityService.canDownloadFile(latest)) { response.sendError(404); return }
+        int depth=0
+        while (latest.nextVersion && depth++ < 100) latest=latest.nextVersion
+        if (!plmFreeCadSecurityService.canDownloadFile(latest)) { response.sendError(404); return }
+        PlmFreeCadPart revision = ([latest] + (latest.history ?: [])).find { it?.id == revisionId }
+        if (!revision || !plmFreeCadSecurityService.canDownloadFile(revision)) { response.sendError(404); return }
+        Integer major = revision.majorVersion == null ? 1 : revision.majorVersion
+        Integer minor = revision.minorVersion == null ? 0 : revision.minorVersion
+        File model = plmPreviewStorageService.modelFileForVersion(latest.id, major, minor)
+        if (!model.isFile() && revision.id != latest.id)
+            model = plmPreviewStorageService.modelFileForVersion(revision.id, major, minor)
+        if (!model.isFile()) { response.sendError(404); return }
+        response.contentType='model/gltf-binary'
+        response.setHeader('X-Content-Type-Options','nosniff')
+        response.setHeader('Cache-Control','private, no-store')
+        response.setContentLengthLong(model.length())
+        model.withInputStream { input -> response.outputStream << input }
+        response.outputStream.flush()
     }
 
     /** Authenticated, user-scoped queue for other modules to add a PLM part or saved assembly. */

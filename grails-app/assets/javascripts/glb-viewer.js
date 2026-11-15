@@ -90,6 +90,49 @@ function updateFields(){$('selected').textContent=selected?selected.name:'None s
 for(const [id,prop,mul] of [['pos','position',1],['rot','rotation',Math.PI/180],['scale-values','scale',1]])$(id).querySelectorAll('input').forEach((input,i)=>input.addEventListener('change',()=>{if(!selected)return;const n=Number(input.value);if(!Number.isFinite(n)||Math.abs(n)>1e7)return updateFields();selected.object[prop].setComponent(i,n*mul);updateFields();updateMeasures();updateSection()}));
 function transformOf(e){return {position:e.object.position.toArray(),rotation:e.object.quaternion.toArray(),scale:e.object.scale.toArray(),visible:e.object.visible}}
 function applyTransform(object,data){if(!data)return;const pos=data.position;if(Array.isArray(pos)&&pos.length===3)object.position.fromArray(pos);if(Array.isArray(data.rotation)&&data.rotation.length===4)object.quaternion.fromArray(data.rotation);else if(Array.isArray(data.rotation)&&data.rotation.length>=3)object.rotation.fromArray(data.rotation.slice(0,3));if(Array.isArray(data.scale)&&data.scale.length===3)object.scale.fromArray(data.scale);object.visible=data.visible!==false}
+let versionMenu=null;
+function closeVersionMenu(){if(versionMenu){versionMenu.remove();versionMenu=null}}
+async function changePartVersion(entry,choice){
+ if(!choice.previewAvailable||!choice.url){status('Version '+choice.version+' has no generated GLB preview');return}
+ if(entry.versionBusy)return;
+ entry.versionBusy=true;closeVersionMenu();
+ try{
+  const gltf=await loadModelWithProgress(choice.url,entry.name+' v'+choice.version);
+  const previous=entry.object.children[0];
+  if(!previous)throw Error('Current part geometry is unavailable');
+  const object=gltf.scene;object.userData.viewerEntry=true;object.scale.copy(previous.scale);
+  const wasSelected=selected===entry;
+  if(wasSelected){clearHighlight();transform.detach()}
+  entry.object.remove(previous);entry.object.add(object);
+  entry.cadVersion=choice.version;entry.versionRevisionId=choice.id;entry.missingGeometry=false;entry.error=null;
+  if(wasSelected)select(entry);else renderObjects();
+  updateMeasures();updateSection();status(entry.name+' switched to v'+choice.version+'; save the scene to retain this version');
+ }catch(error){status('Unable to load v'+choice.version+': '+error.message)}
+ finally{entry.versionBusy=false}
+}
+async function showVersionMenu(entry,x,y){
+ closeVersionMenu();select(entry);
+ const menu=document.createElement('div');versionMenu=menu;menu.className='gv-version-menu';
+ menu.style.left=Math.max(4,Math.min(x,innerWidth-245))+'px';menu.style.top=Math.max(4,Math.min(y,innerHeight-80))+'px';
+ const heading=document.createElement('div');heading.className='gv-version-menu-heading';heading.textContent='Change Version — '+entry.name;menu.append(heading);
+ const loading=document.createElement('div');loading.className='gv-version-menu-info';loading.textContent='Loading versions…';menu.append(loading);
+ document.body.append(menu);
+ try{
+  const result=await api('partVersionChoices?id='+encodeURIComponent(entry.id));
+  if(versionMenu!==menu)return;
+  loading.remove();
+  if(!result.versions?.length){loading.textContent='No versions available';menu.append(loading)}
+  for(const choice of result.versions||[]){
+   const button=document.createElement('button');button.type='button';button.className='gv-version-menu-option';
+   const current=entry.versionRevisionId!=null?String(entry.versionRevisionId)===String(choice.id):entry.cadVersion===choice.version;
+   button.textContent='v'+choice.version+(current?'  ✓ Current':'')+(!choice.previewAvailable?'  (No GLB)':'');
+   button.disabled=!choice.previewAvailable||current;button.onclick=()=>changePartVersion(entry,choice);menu.append(button);
+  }
+  menu.style.top=Math.max(4,Math.min(y,innerHeight-menu.offsetHeight-8))+'px';
+ }catch(error){loading.textContent=error.message}
+}
+document.addEventListener('pointerdown',event=>{if(versionMenu&&!versionMenu.contains(event.target))closeVersionMenu()});
+document.addEventListener('keydown',event=>{if(event.key==='Escape')closeVersionMenu()});
 function renderObjects(){
  const tree=$('tree');tree.replaceChildren();
  const eyeSvg=visible=>'<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12z" fill="'+(visible?'#bcdcff':'none')+'" stroke="#8cc4ff" stroke-width="1.8"/><circle cx="12" cy="12" r="3.3" fill="#1b528c"/>'+(visible?'':'<path d="M3 21 21 3" stroke="#f1b9b9" stroke-width="2"/>')+'</svg>';
@@ -105,6 +148,7 @@ function renderObjects(){
   if(entry.kind==='assembly'){const link=document.createElement('span');link.className='gv-link-indicator';link.title='Linked assembly';link.textContent='🔗';row.append(link)}
   if(entry.cadVersion){const v=document.createElement('span');v.className='gv-part-version';v.textContent='v'+entry.cadVersion;row.append(v)}
   if(entry.updateAvailable){const up=document.createElement('span');up.className='gv-update-available';up.title='Newer version available';up.textContent='⬆';row.append(up)}
+  if(entry.kind==='part'&&entry.source==='plm')row.addEventListener('contextmenu',event=>{event.preventDefault();showVersionMenu(entry,event.clientX,event.clientY)});
   parent.append(row);
   if(entry.kind==='assembly'&&!entry.treeCollapsed){if(entry.error){const err=document.createElement('div');err.className='gv-tree-error';err.style.marginLeft=((depth+1)*19)+'px';err.textContent='⚠ '+entry.error;parent.append(err)}for(const child of entry.children||[])draw(child,parent,depth+1)}
  }
@@ -125,7 +169,7 @@ async function addPart(data,parent=null,partStack=[]){
   if(partStack.length>=24)throw Error('PLM assembly nesting limit reached');
   if(source==='plm'&&(!data.id||!Number.isSafeInteger(Number(data.id))))throw Error('Unresolved PLM component ID');
   const m=await findModel(data.id,source);
-  entry.id=m.id;entry.cadVersion=m.cadVersion||entry.cadVersion;entry.name=filenameLabel(data.sourceFile||m.filename||m.name||entry.name);
+  entry.id=m.id;entry.cadVersion=m.cadVersion||entry.cadVersion;entry.versionRevisionId=data.versionRevisionId||null;entry.name=filenameLabel(data.sourceFile||m.filename||m.name||entry.name);
   if(m.format==='missing')throw Error('Neither ASMJ nor GLB is available');
   if(m.format==='asmj'){
    entry.kind='assembly';
@@ -144,7 +188,14 @@ async function addPart(data,parent=null,partStack=[]){
    }
   }else{
    if(!m.url)throw Error('GLB file unavailable');
-   const gltf=await loadModelWithProgress(m.url,data.name||m.name);
+   let modelUrl=m.url;
+   if(source==='plm'&&data.versionRevisionId){
+    const versions=await api('partVersionChoices?id='+encodeURIComponent(entry.id));
+    const choice=versions.versions?.find(v=>String(v.id)===String(data.versionRevisionId));
+    if(!choice||!choice.previewAvailable)throw Error('Saved CAD version '+(data.cadVersion||'')+' has no GLB preview');
+    modelUrl=choice.url;entry.cadVersion=choice.version;entry.versionRevisionId=choice.id;
+   }
+   const gltf=await loadModelWithProgress(modelUrl,data.name||m.name);
    const object=gltf.scene;object.userData.viewerEntry=true;
    const rawUnits=source==='plm'?(m.geometryUnits||data.geometryUnits):(data.geometryUnits||data.units);const native=rawUnits&&Object.hasOwn(factors,rawUnits)?rawUnits:await requestModelUnits();if(!native)throw Error('Model units were not selected');
    const parentUnit=validUnit(data.parentUnits||'mm');
@@ -365,8 +416,10 @@ window.addEventListener('keydown',event=>{
 });
 $('reset').onclick=()=>{if(!selected)return;selected.object.position.set(0,0,0);selected.object.quaternion.identity();selected.object.scale.set(1,1,1);updateFields();updateMeasures()};$('fit').onclick=fit;
 $('units').onchange=()=>{unit=validUnit($('units').value);updateMeasures()};
-function nodeSnapshot(e){const common={instanceId:e.instanceId,name:e.name,defaultLocation:e.defaultLocation,color:e.partColor||null,...transformOf(e)};return e.kind==='assembly'?{type:'assemblyReference',assemblyId:e.assemblyId,versionPolicy:'latest',...common}:{type:'partInstance',id:e.id,source:e.source,geometryUnits:e.geometryUnits,cadVersion:e.cadVersion,defaultLocation:e.defaultLocation,...common}}
-function snapshot(){return {id:activeSceneId,name:$('scene-name').value||'Untitled Scene',shared:$('shared').checked,format:'PartsManagerAssembly',schemaVersion:2,units:'mm',nodes:entries.map(nodeSnapshot),measurements,notes:sceneNotes.map(n=>({id:n.id,name:n.name,instanceId:n.instanceId})),sections:[sectionConfig()],camera:{projection:perspectiveEnabled?'perspective':'orthographic',spinCenter,position:camera.position.toArray(),target:orbit.target.toArray(),up:camera.up.toArray()},displayUnits:unit,tree:{left:$('tree-overlay').style.left,top:$('tree-overlay').style.top}}}
+function nodeSnapshot(e){const common={instanceId:e.instanceId,name:e.name,defaultLocation:e.defaultLocation,color:e.partColor||null,...transformOf(e)};return e.kind==='assembly'?{type:'assemblyReference',assemblyId:e.assemblyId,versionPolicy:'latest',...common}:{type:'partInstance',id:e.id,source:e.source,geometryUnits:e.geometryUnits,cadVersion:e.cadVersion,versionRevisionId:e.versionRevisionId||null,defaultLocation:e.defaultLocation,...common}}
+function versionOverrides(){const overrides={};const walk=(nodes,path)=>nodes.forEach((entry,index)=>{const key=path.concat(index).join('/');if(entry.kind==='part'&&entry.source==='plm'&&entry.versionRevisionId)overrides[key]={revisionId:entry.versionRevisionId,version:entry.cadVersion};walk(entry.children||[],path.concat(index))});walk(entries,[]);return overrides}
+async function restoreVersionOverrides(overrides){if(!overrides||typeof overrides!=='object')return;const jobs=[];const walk=(nodes,path)=>nodes.forEach((entry,index)=>{const key=path.concat(index).join('/');const saved=overrides[key];if(saved&&entry.kind==='part'&&entry.source==='plm'&&String(entry.versionRevisionId||'')!==String(saved.revisionId))jobs.push([entry,saved]);walk(entry.children||[],path.concat(index))});walk(entries,[]);for(const [entry,saved] of jobs){try{const result=await api('partVersionChoices?id='+encodeURIComponent(entry.id));const choice=result.versions?.find(v=>String(v.id)===String(saved.revisionId));if(choice?.previewAvailable)await changePartVersion(entry,choice);else status('Saved version '+saved.version+' is unavailable for '+entry.name)}catch(error){status(error.message)}}}
+function snapshot(){return {versionOverrides:versionOverrides(),id:activeSceneId,name:$('scene-name').value||'Untitled Scene',shared:$('shared').checked,format:'PartsManagerAssembly',schemaVersion:2,units:'mm',nodes:entries.map(nodeSnapshot),measurements,notes:sceneNotes.map(n=>({id:n.id,name:n.name,instanceId:n.instanceId})),sections:[sectionConfig()],camera:{projection:perspectiveEnabled?'perspective':'orthographic',spinCenter,position:camera.position.toArray(),target:orbit.target.toArray(),up:camera.up.toArray()},displayUnits:unit,tree:{left:$('tree-overlay').style.left,top:$('tree-overlay').style.top}}}
 const saveDialog=$('save-dialog');let saveDialogBusy=false;let saveAsNewPending=false;
 function showSaveDialog(asNew=false){saveAsNewPending=asNew;const name=$('scene-name').value.trim();$('save-name').value=name==='Untitled Scene'?'':name;$('save-share').checked=$('shared').checked;$('save-error').hidden=true;saveDialog.showModal();$('save-name').focus();$('save-name').select()}
 function closeSaveDialog(){if(!saveDialogBusy)saveDialog.close()}
@@ -375,7 +428,7 @@ $('save-form').addEventListener('submit',async event=>{event.preventDefault();if
 async function saveSceneRecord(asNew,name,shared){const body=snapshot();if(asNew)body.id=null;if(name!==undefined)body.name=name;if(shared!==undefined)body.shared=shared;const saved=await api('saveScene',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});activeSceneId=saved.id;sceneCreator=viewerUsername;$('scene-name').value=saved.name;$('shared').checked=saved.shared===true;await refresh();$('scenes').value=String(saved.id);status('Scene saved');return saved}
 async function save(asNew){if(asNew||!activeSceneId){showSaveDialog(asNew);return}try{await saveSceneRecord(false)}catch(e){status(e.message)}}
 $('save').onclick=()=>{closeSaveMenu();save(false)};$('save-new').onclick=()=>{closeSaveMenu();save(true)};$('export').onclick=()=>{closeSaveMenu();const blob=new Blob([JSON.stringify(snapshot(),null,2)],{type:'application/json'}),a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=($('scene-name').value||'assembly').replace(/[^a-z0-9_-]/gi,'_')+'.asmj';a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000)};
-async function loadScene(id){deletedEntry=null;updateDeleteButtons();const data=await api('loadScene/'+id);clearScene();await buildNodes(data.scene,null,[Number(id)]);restoreNotes(data.scene.notes);sceneCreator=data.owner||data.createdBy||sceneRows.find(s=>String(s.id)===String(id))?.owner||null;activeSceneId=data.id;$('scene-name').value=data.name;$('shared').checked=data.shared;measurements=Array.isArray(data.scene.measurements)?data.scene.measurements:[];unit=validUnit(data.scene.displayUnits||'mm');$('units').value=unit;const sec=data.scene.sections?.[0];if(sec){$('section-enabled').checked=sec.enabled===true;$('section-axis').value=sec.axis||'z';$('section-position').value=number(sec.position);$('section-rotation').value=number(sec.rotation);$('section-rotation-label').textContent=$('section-rotation').value+'°';$('section-reverse').checked=sec.reversed===true;$('section-scope').value=sec.scope||'scene';$('section-show-plane').checked=sec.showPlane!==false;$('section-cap').checked=sec.cap!==false;$('section-cap-color').value=/^#[0-9a-f]{6}$/i.test(sec.capColor||'')?sec.capColor:'#d94a40'}updateSection();const c=data.scene.camera;if(c){switchProjection(c.projection==='perspective');setSpinCenter(c.spinCenter||'model');if(Array.isArray(c.position))camera.position.fromArray(c.position);if(Array.isArray(c.target))orbit.target.fromArray(c.target);if(Array.isArray(c.up))camera.up.fromArray(c.up);orbit.update()}else fit();const tree=data.scene.tree||{};if(tree.left)$('tree-overlay').style.left=tree.left;if(tree.top)$('tree-overlay').style.top=tree.top;updateMeasures();renderObjects();const missing=allEntries().filter(e=>e.missingGeometry);status('Loaded '+data.name+(missing.length?' ('+missing.length+' missing GLB'+(missing.length===1?'':'s')+')':''))}
+async function loadScene(id){deletedEntry=null;updateDeleteButtons();const data=await api('loadScene/'+id);clearScene();await buildNodes(data.scene,null,[Number(id)]);await restoreVersionOverrides(data.scene.versionOverrides);restoreNotes(data.scene.notes);sceneCreator=data.owner||data.createdBy||sceneRows.find(s=>String(s.id)===String(id))?.owner||null;activeSceneId=data.id;$('scene-name').value=data.name;$('shared').checked=data.shared;measurements=Array.isArray(data.scene.measurements)?data.scene.measurements:[];unit=validUnit(data.scene.displayUnits||'mm');$('units').value=unit;const sec=data.scene.sections?.[0];if(sec){$('section-enabled').checked=sec.enabled===true;$('section-axis').value=sec.axis||'z';$('section-position').value=number(sec.position);$('section-rotation').value=number(sec.rotation);$('section-rotation-label').textContent=$('section-rotation').value+'°';$('section-reverse').checked=sec.reversed===true;$('section-scope').value=sec.scope||'scene';$('section-show-plane').checked=sec.showPlane!==false;$('section-cap').checked=sec.cap!==false;$('section-cap-color').value=/^#[0-9a-f]{6}$/i.test(sec.capColor||'')?sec.capColor:'#d94a40'}updateSection();const c=data.scene.camera;if(c){switchProjection(c.projection==='perspective');setSpinCenter(c.spinCenter||'model');if(Array.isArray(c.position))camera.position.fromArray(c.position);if(Array.isArray(c.target))orbit.target.fromArray(c.target);if(Array.isArray(c.up))camera.up.fromArray(c.up);orbit.update()}else fit();const tree=data.scene.tree||{};if(tree.left)$('tree-overlay').style.left=tree.left;if(tree.top)$('tree-overlay').style.top=tree.top;updateMeasures();renderObjects();const missing=allEntries().filter(e=>e.missingGeometry);status('Loaded '+data.name+(missing.length?' ('+missing.length+' missing GLB'+(missing.length===1?'':'s')+')':''))}
 $('load').onclick=()=>loadScene($('scenes').value).catch(e=>status(e.message));$('refresh').onclick=()=>refresh().catch(e=>status(e.message));
 // Saved scene manager: selection is independent of the currently loaded scene.
 const viewerUsername=document.getElementById('gv-root').dataset.viewerUser||'';const sceneDialog=$('scenes-dialog');let sceneRows=[],sceneChoice=null;
