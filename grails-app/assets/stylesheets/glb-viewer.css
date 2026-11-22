@@ -107,3 +107,34 @@
 .gv-version-menu-option{display:block;width:100%;text-align:left;background:transparent;color:inherit;border:0;border-radius:4px;padding:9px 10px;cursor:pointer}
 .gv-version-menu-option:hover:not(:disabled),.gv-version-menu-option:focus-visible{background:#31577d}
 .gv-version-menu-option:disabled{opacity:.55;cursor:default}
+
+
+/* Compact camera controls: centered overlay inside the 3D viewport. */
+.gv .gv-view > .gv-camera-toolbar {
+ position:absolute; z-index:12; top:12px; left:50%; transform:translateX(-50%);
+ display:flex; flex-wrap:nowrap; align-items:center; justify-content:center;
+ width:max-content; max-width:calc(100% - 24px); margin:0; padding:5px 7px;
+ gap:5px; border:1px solid var(--pm-border); border-radius:12px;
+ background:var(--pm-surface); background:color-mix(in srgb, var(--pm-surface) 88%, transparent);
+ box-shadow:0 4px 16px rgba(0,0,0,.22);
+ color:var(--pm-text); overflow-x:auto; scrollbar-width:thin;
+}
+.gv .gv-view > .gv-camera-toolbar .gv-view-presets,
+.gv .gv-view > .gv-camera-toolbar .gv-spin-buttons {display:flex;align-items:center;flex-wrap:nowrap;gap:3px;flex:none}
+.gv .gv-view > .gv-camera-toolbar button,
+.gv .gv-view > .gv-camera-toolbar .gv-spin-buttons button {
+ box-sizing:border-box; display:grid; place-items:center; flex:none;
+ width:36px; height:36px; min-width:36px; min-height:36px;
+ padding:4px; margin:0; border:1px solid transparent; border-radius:6px;
+ background:transparent; color:var(--pm-text); line-height:1;
+}
+.gv .gv-view > .gv-camera-toolbar button:hover {background:rgba(79,139,210,.35);border-color:rgba(122,182,240,.5)}
+.gv .gv-view > .gv-camera-toolbar button.active {background:#2676c9;border-color:#5199e4;color:#fff}
+.gv .gv-view > .gv-camera-toolbar .gv-cad-svg,
+.gv .gv-view > .gv-camera-toolbar #gv-fit .gv-icon svg,
+.gv .gv-view > .gv-camera-toolbar .gv-spin-buttons .gv-cad-svg {width:28px;height:28px;display:block;flex:none}
+.gv .gv-view > .gv-camera-toolbar #gv-fit .gv-icon {display:grid;place-items:center;width:28px;height:28px}
+.gv .gv-view > .gv-camera-toolbar .gv-spin-buttons {border-left:1px solid var(--pm-border);padding-left:7px;margin-left:4px}
+.gv .gv-view > .gv-camera-toolbar .gv-toolbar-divider {display:none}
+.gv .gv-view > .gv-camera-toolbar .gv-scene-state {display:none}
+@media(max-width:650px){.gv .gv-view > .gv-camera-toolbar{top:8px;max-width:calc(100% - 16px)}}
