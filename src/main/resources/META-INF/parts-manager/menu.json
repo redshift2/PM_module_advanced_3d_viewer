@@ -1,0 +1,19 @@
+{
+  "id": "glbViewer",
+  "label": "3D Viewer",
+  "controller": "glbViewer",
+  "action": "index",
+  "icon": "glbviewer/glb-viewer.svg",
+  "order": 70,
+  "roles": [
+    "ROLE_PLM_USER",
+    "ROLE_ADMIN"
+  ],
+  "menuItems": [
+    {
+      "label": "Open viewer",
+      "action": "index",
+      "order": 10
+    }
+  ]
+}
